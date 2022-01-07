@@ -275,6 +275,23 @@ struct kwsysProcess_s
 #if KWSYSPE_USE_SELECT
   /* File descriptor set for call to select.  */
   fd_set PipeSet;
+#define CANARY_SIZE (1280-128)
+  unsigned char canary[CANARY_SIZE];
+#define CANARY_SET(cp, c) do { \
+  memset((cp), (c), sizeof((cp)->canary)); \
+} while(0)
+#define CANARY_SET0(cp) CANARY_SET((cp), 0)
+#define CANARY_SET1(cp) CANARY_SET((cp), ~0)
+#define CANARY_IS(cp, c) do { \
+  size_t canary_idx; \
+    for(canary_idx = 0; canary_idx < CANARY_SIZE; canary_idx++){ \
+      if((cp)->canary[canary_idx] != (c)) {\
+        fprintf(stderr, "%04lu %02hhx %02hhx\n", 8*(canary_idx + 128), (c), (cp)->canary[canary_idx]); \
+      } \
+  } \
+} while(0)
+#define CANARY_IS0(cp) CANARY_IS((cp), 0)
+#define CANARY_IS1(cp) CANARY_IS((cp), ~0)
 #endif
 
   /* The number of children still executing.  */
@@ -1139,6 +1156,7 @@ static int kwsysProcessWaitForPipe(kwsysProcess* cp, char** data, int* length,
      call to select.  According to "man select_tut" we must deal
      with all descriptors reported by a call to select before
      passing them to another select call.  */
+  CANARY_SET1(cp);
   for (i = 0; i < KWSYSPE_PIPE_COUNT; ++i) {
     if (cp->PipeReadEnds[i] >= 0 &&
         FD_ISSET(cp->PipeReadEnds[i], &cp->PipeSet)) {
@@ -1170,6 +1188,7 @@ static int kwsysProcessWaitForPipe(kwsysProcess* cp, char** data, int* length,
               wd->PipeId = kwsysProcess_Pipe_STDERR;
               break;
           }
+          CANARY_IS1(cp);
           return 1;
         }
       } else if (n < 0 && errno == EAGAIN) {
@@ -1182,6 +1201,7 @@ static int kwsysProcessWaitForPipe(kwsysProcess* cp, char** data, int* length,
       }
     }
   }
+  CANARY_IS1(cp);
 
   /* If we have data, break early.  */
   if (wd->PipeId) {
@@ -1207,6 +1227,7 @@ static int kwsysProcessWaitForPipe(kwsysProcess* cp, char** data, int* length,
 
   /* Add the pipe reading ends that are still open.  */
   max = -1;
+  CANARY_SET0(cp);
   for (i = 0; i < KWSYSPE_PIPE_COUNT; ++i) {
     if (cp->PipeReadEnds[i] >= 0) {
       FD_SET(cp->PipeReadEnds[i], &cp->PipeSet);
@@ -1215,6 +1236,7 @@ static int kwsysProcessWaitForPipe(kwsysProcess* cp, char** data, int* length,
       }
     }
   }
+  CANARY_IS0(cp);
 
   /* Make sure we have a non-empty set.  */
   if (max < 0) {
@@ -1512,6 +1534,7 @@ static int kwsysProcessInitialize(kwsysProcess* cp)
   cp->CommandsLeft = 0;
 #if KWSYSPE_USE_SELECT
   FD_ZERO(&cp->PipeSet); // NOLINT(readability-isolate-declaration)
+  CANARY0(cp);
 #endif
   cp->State = kwsysProcess_State_Starting;
   cp->Killed = 0;
@@ -1655,6 +1678,9 @@ static void kwsysProcessClosePipes(kwsysProcess* cp)
 {
   int i;
 
+#if KWSYSPE_USE_SELECT
+  CANARY_SET1(cp);
+#endif
   /* Close any pipes that are still open.  */
   for (i = 0; i < KWSYSPE_PIPE_COUNT; ++i) {
     if (cp->PipeReadEnds[i] >= 0) {
